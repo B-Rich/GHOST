@@ -31,12 +31,17 @@ Options:
     --phase           Do a temperature vs density phase diagram instead of plot
     --stars           Count stars instead of plot
     --accrete         If enabled the stars can accrete and so are black hole particles
+    --cumstars        If enabled then do a cumulative star formation vs. time plot, also print the average of StellarFormationTime
+    --phaseatpeaksf   If enabled then, compute the average star formation time of stars formed by 1Myr, then do a temperature vs. density phase diagram close to that time
 """
 
 import matplotlib as mpl
 from PlotSettings import *
 mpl.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.mlab as mlab
+from scipy.stats import lognorm
+import scipy as sp
 from PIL import Image, ImageDraw, ImageFont
 import h5py
 import numpy as np
@@ -48,6 +53,8 @@ import re
 import os
 import DensityHsml
 import hope
+from scipy.stats import norm
+
 from docopt import docopt
 from GridDeposit import *
 import glob
@@ -75,9 +82,32 @@ cooling = arguments["--cooling"]
 target_time = arguments["--time"]
 analyze_stars = arguments["--stars"]
 analyze_phase = arguments["--phase"]
+analyze_phaseatpeaksf = arguments["--phaseatpeaksf"]
+analyze_cumstars = arguments["--cumstars"]
 accrete = arguments["--accrete"]
 font = ImageFont.truetype("LiberationSans-Regular.ttf", gridres/12)
 G = 4.3e4
+def create_figure(size=3.6,nxticks=6):
+    import matplotlib
+    from matplotlib.ticker import MaxNLocator
+    figure=matplotlib.pyplot.figure(figsize=(size,size)) 
+    ax = figure.add_subplot(1, 1, 1, position = [0.2, 0.15, 0.75, 0.75]) 
+    ax.xaxis.set_major_locator(MaxNLocator(nxticks)) 
+    return ax
+
+def format_axes(ax,xf='%d',yf='%d',nxticks=6,nyticks=6,labelsize=10):
+    import pylab
+    from matplotlib.ticker import FormatStrFormatter, MaxNLocator
+    xFormatter = FormatStrFormatter(xf)
+    yFormatter = FormatStrFormatter(yf)
+    if xf:
+      ax.xaxis.set_major_formatter(xFormatter)
+      ax.xaxis.set_major_locator(MaxNLocator(nxticks))
+      ax.tick_params(axis='x', which='major', labelsize=labelsize)
+    if yf:
+      ax.yaxis.set_major_formatter(yFormatter)
+      ax.yaxis.set_major_locator(MaxNLocator(nyticks))
+      ax.tick_params(axis='y', which='major', labelsize=labelsize)
 
 class SnapData:
     def __init__(self, name):
@@ -479,50 +509,83 @@ def AnalyzePhase(f,as_list=True):
     mu = 4.0 / (3.0 * x_H + 1.0 + 4.0 * x_H * a_e)
     temp=data.field_data[gas_idx]["InternalEnergy"]*1e10*mu*(gamma-1)*1.211e-8
 
-    n, bins, patches = plt.hist(temp, 50, facecolor='green', alpha=0.75) #normed=1 gives probability
+    temp=np.sort(temp)
+
+    n, bins, patches = plt.hist(temp, bins=np.logspace(1, 4, 50), facecolor='green', alpha=0.75) #normed=1 gives probability
+    # bins, is the left hand edge of each bin
+    # Since this isn't a lognormal distribution, doesn't really fit well
+    #shape,loc,scale = lognorm.fit(temp)
+    #pdf = sp.stats.lognorm.pdf(temp, shape, loc, scale)
+    #plt.plot(temp,pdf)
     plt.xlabel("Temperature [Kelvin]")
     plt.ylabel("$N_{gas}$")
     plt.xscale("log")
-    plt.xlim([10**2,10**7])
+#    plt.ylim([0,4000])
+
+    plt.xlim([1,10**5])
 #    plt.yscale("log")
     info=GetInfoFromDir(as_list=True) 
     z=info[0]
     plt.title(GetPlotTitle(data.time)+ ' $Z/Z_\odot=%s$'%z)
     #l = plt.plot(bins, y, 'r--', linewidth=1)
-    plt.savefig("%s-%f_gastemphist.png"%(GetInfoFromDir(),data.time),dpi=400)
+    plt.savefig("%s-%f_gastemphist_logbins.png"%(GetInfoFromDir(),data.time),dpi=400)
+    plt.clf()
 
-    info+=[np.average(data.field_data[gas_idx]["Masses"]*temp)]
-    print 'MassWeight,',','.join(map(str,info))
+    info+=[n[np.argmax(n)-1],n[np.argmax(n)],n[np.argmax(n)+1],bins[np.argmax(n)-1],bins[np.argmax(n)],bins[np.argmax(n)+1],np.average(temp),np.median(temp),np.std(temp)]
+    print 'musigma'+','.join(map(str,info))
+
+
+#     plt.clf()
+#     gamma = 5.0/3.0
+#     x_H = 0.76
+#     a_e = 0.0
+#     mu = 4.0 / (3.0 * x_H + 1.0 + 4.0 * x_H * a_e)
+#     temp=data.field_data[gas_idx]["InternalEnergy"]*1e10*mu*(gamma-1)*1.211e-8
+
+#     n, bins, patches = plt.hist(temp, 50, facecolor='green', alpha=0.75) #normed=1 gives probability
+#     plt.xlabel("Temperature [Kelvin]")
+#     plt.ylabel("$N_{gas}$")
+#     #plt.xscale("log")
+#     plt.xlim([10,10**4])
+# #    plt.yscale("log")
+#     info=GetInfoFromDir(as_list=True) 
+#     z=info[0]
+#     plt.title(GetPlotTitle(data.time)+ ' $Z/Z_\odot=%s$'%z)
+#     #l = plt.plot(bins, y, 'r--', linewidth=1)
+#     plt.savefig("%s-%f_gastemphist_nolog.png"%(GetInfoFromDir(),data.time),dpi=400)
+
+
+    # Add in peak of the distribution and width
 
     #print "GAS SFE",data.time
     #print "ave",np.average(data.field_data[gas_idx]["StarFormationRate"])
     #print "min",np.min(data.field_data[gas_idx]["StarFormationRate"])
     #print "max",np.max(data.field_data[gas_idx]["StarFormationRate"])
 
+    # plt.clf()
+    # plt.plot(temp,data.field_data[gas_idx]["Density"],'ro')
+    # plt.xlabel("InternalEnergy [Kelvin]") # particle internal energy (specific energy per unit mass in code units). units are physical
+    # plt.ylabel("Density [units ?]")# Density (P['rho']): [N]-element array, code-calculated gas density, at the coordinate position of the particle 
 
-    plt.plot(temp,data.field_data[gas_idx]["Density"],'ro')
-    plt.xlabel("InternalEnergy [Kelvin]") # particle internal energy (specific energy per unit mass in code units). units are physical
-    plt.ylabel("Density [units ?]")# Density (P['rho']): [N]-element array, code-calculated gas density, at the coordinate position of the particle 
+    # # plt.yscale('log')
+    # # plt.xscale('log')
+    # plt.title(GetPlotTitle(data.time))
 
-    # plt.yscale('log')
-    # plt.xscale('log')
-    plt.title(GetPlotTitle(data.time))
-
-    #l = plt.plot(bins, y, 'r--', linewidth=1)
-    plt.savefig("%s-%f_temp_dens.png"%(GetInfoFromDir(),data.time),dpi=400)
+    # #l = plt.plot(bins, y, 'r--', linewidth=1)
+    # plt.savefig("%s-%f_temp_dens.png"%(GetInfoFromDir(),data.time),dpi=400)
 
 
 def AnalyzeStars(f,as_list=True):
     data = SnapData(f)
     try:
-	hopf=open(f.replace("snapshot","bound").replace("hdf5","dat"))
-	hopf=genfromtxt(hopf)
+        hopf=open(f.replace("snapshot","bound").replace("hdf5","dat"))
+        hopf=genfromtxt(hopf)
         try:
             biggest_hop_mass=hopf[0][0]
         except:
             biggest_hop_mass=hopf[0]
     except:
-	biggest_hop_mass="unknown"
+    	biggest_hop_mass="unknown"
     if data.time==0.0:
         return
     if target_time:
@@ -559,7 +622,58 @@ def AnalyzeStars(f,as_list=True):
         plt.title(GetPlotTitle(data.time))
         #l = plt.plot(bins, y, 'r--', linewidth=1)
         plt.savefig("%s-%f_starhist.png"%(GetInfoFromDir(),data.time),dpi=400)
-    
+
+def PhaseAtPeakSf(files):
+    peaksftime=None
+    for f in files:
+        data = SnapData(f)
+        if data.time==0.0:
+            continue
+        if not np.isclose(data.time,float(0.001)):
+            continue
+        if (accrete or GetInfoFromDir(f)[-1]!='not_used') and data.field_data[5]:
+            stars_idx = 5
+        else:
+            stars_idx =4
+        peaksftime=np.average(data.field_data[stars_idx]['StellarFormationTime'])
+    if peaksftime:
+        info=GetInfoFromDir(f)
+        info+=[peaksftime]
+        print info
+    #     for f in files:
+    #         data = SnapData(f)
+    #         if data.time==0.0:
+    #             continue
+    #         if not np.isclose(data.time,float(peaksftime)):
+    #             print data.time,"not close enough"
+    #             continue
+    #         else:
+    #             print "Analyzing gas temp at t=",data.timer
+
+def CumulativeStarsVsTime(files):
+    masses=[]
+    times=[]
+    for f in files:
+        data = SnapData(f)
+        try:
+            if (accrete or GetInfoFromDir(f)[-1]!='not_used') and data.field_data[5]:
+                stars_idx = 5
+            else:
+                stars_idx =4
+            masses+=[np.sum(convert_mass(data.field_data[stars_idx]["Masses"]))]
+            times+=[data.time*979]
+
+        except:
+            print("no masses for t=",data.time)
+
+    plt.clf()
+    ax=create_figure()
+    ax.set_xlabel("Time [Myr]")
+    ax.set_ylabel("Total Mass in Stars [$M_\odot/h$]")
+    ax.plot(times,masses)
+    format_axes(ax,xf='%.1f',yf="%.2g",nxticks=7,labelsize=6)
+    plt.savefig("mstartotal.png")
+
 def main():
     if nproc > 1:
         from joblib import Parallel, delayed, cpu_count
@@ -568,6 +682,13 @@ def main():
         function = AnalyzeStars
     elif analyze_phase:
         function = AnalyzePhase
+    elif analyze_cumstars:
+        print("analyze cumstars")
+        CumulativeStarsVsTime(filenames)
+        return
+    elif analyze_phaseatpeaksf:
+        PhaseAtPeakSf(filenames)
+        return
     else:
         function = MakePlot
 
